@@ -1,8 +1,6 @@
 import cv2
 import mediapipe as mp
 import numpy as np
-import math
-import winsound  # For Windows beep sound, use other alternatives for different platforms
 
 # 初始化 MediaPipe Pose 模块
 mp_pose = mp.solutions.pose
@@ -23,15 +21,15 @@ def calculate_angle(a, b, c):
 
     return angle
 
+# 初始化变量
+counter = 0
+stage = None  # 当前状态 ('A'或'B')
+
 # 打开视频流
 cap = cv2.VideoCapture(0)
-horizon_angle_threshold = 90  # Set the horizon angle threshold
 
 while cap.isOpened():
     ret, frame = cap.read()
-    
-    # 水平翻转图像
-    frame = cv2.flip(frame, 1)
 
     # 将图像转为RGB
     image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -41,7 +39,7 @@ while cap.isOpened():
     if results.pose_landmarks:
         landmarks = results.pose_landmarks.landmark
 
-        # 获取髋部、膝盖和肩膀的坐标
+        # 获取髋部和膝盖的坐标
         hip = [landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].x, landmarks[mp_pose.PoseLandmark.LEFT_HIP.value].y]
         knee = [landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].x, landmarks[mp_pose.PoseLandmark.LEFT_KNEE.value].y]
         shoulder = [landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x, landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y]
@@ -49,30 +47,63 @@ while cap.isOpened():
         # 计算髋部的角度
         hip_angle = calculate_angle(shoulder, hip, knee)
 
+        # 检查当前的状态 (standing 或 squat)
+        if hip[1] < knee[1]:  # 髋部高于膝盖 (站立状态)
+            if stage == 'standing':
+                stage = 'squat'
+                counter += 1  # 完成一次深蹲
+        elif hip[1] > knee[1]:  # 髋部低于膝盖 (深蹲状态)
+            stage = 'standing'
+        # 获取肩膀和鼻子的关键点
+        left_shoulder = [landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x, landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y]
+        right_shoulder = [landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x, landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y]
+        nose = [landmarks[mp_pose.PoseLandmark.NOSE.value].x, landmarks[mp_pose.PoseLandmark.NOSE.value].y]
+
+        # 计算肩膀的宽度，并确定头部的宽度和高度
+        shoulder_width = np.linalg.norm(np.array(left_shoulder) - np.array(right_shoulder))
+        head_width = shoulder_width *.6
+        head_height = head_width * 1.8
+
+        # 将头部宽度和高度转换为像素
+        head_width_px = int(head_width * frame.shape[1])
+        head_height_px = int(head_height * frame.shape[0])
+
+        # 计算头部矩形的边界
+        x_center = int(nose[0] * frame.shape[1])
+        y_center = int(nose[1] * frame.shape[0])
+
+        x_min = x_center - head_width_px // 2
+        y_min = y_center - head_height_px // 2
+        x_max = x_center + head_width_px // 2
+        y_max = y_center + head_height_px // 2
+
+        # 绘制灰色矩形
+        cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (128, 128, 128), -1)
+        # 显示计数和髋部角度
+        cv2.putText(frame, f'Squat Count: {counter}',
+                    (10, 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 2,
+                    (0, 255, 0), 2, cv2.LINE_AA)
+
         # 在图像左上角显示角度（使用较大的字体）
         cv2.putText(frame, f'Hip Angle: {int(hip_angle)}',
-                    (20, 50),  # 位置在左上角
+                    (10, 100),  # 位置在左上角
                     cv2.FONT_HERSHEY_SIMPLEX, 2,  # 字体大小为2
-                    (255, 255,255), 3, cv2.LINE_AA  # 绿色字体，线宽为3
+                    (0, 255, 0), 2, cv2.LINE_AA  # 绿色字体，线宽为3
                     )
 
         # 检测髋部是否低于膝盖
         if hip[1] > knee[1]:
             circle_color = (255, 255, 255)  # 白色
-            #winsound.Beep(1000, 200)  # 1000 Hz for 200 ms (adjust as needed)
-
         else:
             circle_color = (0, 0, 255)  # 红色
 
         # 绘制大圆圈在右上角
         cv2.circle(frame, (frame.shape[1] - 50, 50), 40, circle_color, -1)
 
+
         # 绘制关键点和骨架
         mp_drawing.draw_landmarks(frame, results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-
-        # 触发蜂鸣声，当髋部角度达到或超过设定的水平角度阈值时
-        #if hip_angle <= horizon_angle_threshold:
-        #    winsound.Beep(1000, 200)  # 1000 Hz for 200 ms (adjust as needed)
 
     cv2.imshow('Mediapipe Feed', frame)
 
